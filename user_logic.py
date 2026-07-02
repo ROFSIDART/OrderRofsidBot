@@ -1,9 +1,8 @@
-import os
-import time
-import threading
+import os; import time; import threading
 from dotenv import load_dotenv
-import telebot
-from telebot import TeleBot, types
+import telebot; from telebot import TeleBot, types
+from lang_text import * 
+
 load_dotenv()
 
 BOT_TOKEN = os.getenv('BOT_TOKEN')
@@ -36,7 +35,7 @@ repeatBtn = types.InlineKeyboardButton('Нет, переделать', callback_
 #Button for admin
 seeBtn = types.InlineKeyboardButton('Посмотреть', callback_data='callSeeBtn')
 
-Btn = {0: exitBtn, 1: requestBtn1, 2: requestBtn2, 3: requestBtn3, 4: requestBtn4, 5: requestBtn5, 6: requestBtn6, 11: seeBtn, 12: menuBtn}
+Btn = {0: exitBtn, 1: requestBtn1, 2: requestBtn2, 3: requestBtn3, 4: requestBtn4, 5: requestBtn5, 6: requestBtn6, 11: seeBtn}
 
 #button group
 def get_menu_markup():
@@ -55,7 +54,7 @@ def get_exit_markup():
     markup.row(Btn[0])
     return markup
 
-@MyBot.message_handler()
+@MyBot.message_handler(content_types=['text', 'photo', 'document'])
 def main(message):
     chat_id = message.chat.id
     if chat_id in user_states and user_states[chat_id].get('state') == 'waiting_for_order':
@@ -125,15 +124,23 @@ def callback_message(callback):
                 f"<b>ID пользователя:</b> <code>{data['user_id']}</code>\n\n"
                 f"<b>Текст обращения:</b>\n{data['order_text']}"
             )
-            MyBot.send_message(ADMIN_CHAT_ID, admin_message, parse_mode='html')
-
-            if data['content_type'] == 'photo':
-                MyBot.send_photo(ADMIN_CHAT_ID, photo=data['file_id'], caption=admin_message, parse_mode='html')
-            elif data['content_type'] == 'document':
-                MyBot.send_document(ADMIN_CHAT_ID, document=data['file_id'], caption=admin_message, parse_mode='html')
-            else:
+            media_list = data.get('media_list', [])
+            if len(media_list) == 0:
                 MyBot.send_message(ADMIN_CHAT_ID, admin_message, parse_mode='html')
-                
+            elif len(media_list) == 1:
+                if media_list[0]['type'] == 'photo':
+                    MyBot.send_photo(ADMIN_CHAT_ID, photo=media_list[0]['file_id'], caption=admin_message, parse_mode='html')
+                elif media_list[0]['type'] == 'document':
+                    MyBot.send_document(ADMIN_CHAT_ID, document=media_list[0]['file_id'], caption=admin_message, parse_mode='html')
+            else:
+                album = []
+                for i, item in enumerate(media_list):
+                    caption = admin_message if i == 0 else ""
+                    if item['type'] == 'photo':
+                        album.append(types.InputMediaPhoto(item['file_id'], caption=caption, parse_mode='html'))
+                    elif item['type'] == 'document':
+                        album.append(types.InputMediaDocument(item['file_id'], caption=caption, parse_mode='html'))
+                MyBot.send_media_group(ADMIN_CHAT_ID, album)      
             MyBot.send_message(chat_id, "🎉 Ваш запрос успешно отправлен! В скором времени София свяжется с вами, чтобы подтвердить запрос...", reply_markup=get_exit_markup())
             del temporary_orders[chat_id]
 
@@ -156,47 +163,81 @@ def handle_order_message(message):
         del user_states[chat_id]
         MyBot.send_message(message.chat.id, "❌ Оформление заказа отменено.", reply_markup=get_menu_markup())
         return
-def ask_confirmation(message, user_order_id):
-    user_text = message.text or message.caption
-
+    if message.media_group_id:
     
-    content_type = message.content_type 
-    file_id = None
+        mg_id = message.media_group_id
+        with media_groups_lock:
+            if mg_id not in media_groups_cache:
+                media_groups_cache[mg_id] = {'messages': [], 'processed': False}
+            media_groups_cache[mg_id]['messages'].append(message)
+            is_first = len(media_groups_cache[mg_id]['messages']) == 1
+        if is_first:
+            time.sleep(1.0)
+            with media_groups_lock:
+                messages = media_groups_cache[mg_id]['messages']
+                media_groups_cache[mg_id]['processed'] = True
+            process_collected_messages(chat_id, messages, user_order_id)
+
+            if chat_id in user_states: del user_states[chat_id]
+            with media_groups_lock:
+                if mg_id in media_groups_cache: del media_groups_cache[mg_id]
+        else:
+            return
+    else:
+        process_collected_messages(chat_id, [message], user_order_id)
+        if chat_id in user_states: del user_states[chat_id]
+
+def process_collected_messages(chat_id, messages, user_order_id):
     order_text = ""
+    media_list = []
 
-    if content_type == 'text':
-        order_text = message.text
-    elif content_type == 'photo':
-        file_id = message.photo[-1].file_id
-        order_text = message.caption or "[Фото без описания]"
-    elif content_type == 'document':
-        file_id = message.document.file_id
-        order_text = message.caption or "[Файл/Архив без описания]"
+    for msg in messages:
+        if msg.text:
+            order_text = msg.text
+        elif msg.caption:
+            order_text = msg.caption
+    if not order_text:
+        order_text = "[Без описания]"
 
+    for msg in messages:
+        if msg.content_type == 'photo':
+            media_list.append({'type': 'photo', 'file_id': msg.photo[-1].file_id})
+        elif msg.content_type == 'document':
+            media_list.append({'type': 'document', 'file_id': msg.document.file_id})
 
-    temporary_orders[message.chat.id] = {
+    first_msg = messages[0]
+    temporary_orders[chat_id] = {
         'user_order_id': user_order_id,
-        "user_name" : message.from_user.first_name,
-        "user_username" : f"@{message.from_user.username}" if message.from_user.username else "Нет юзернейма",
-        "user_id" : message.from_user.id,
+        "user_name" : first_msg.from_user.first_name,
+        "user_username" : f"@{first_msg.from_user.username}" if first_msg.from_user.username else "Нет юзернейма",
+        "user_id" : first_msg.from_user.id,
         "order_text" : order_text,
-        "content_type": content_type,
-        "file_id": file_id
+        "media_list": media_list
     }
-    markup = types.InlineKeyboardMarkup()
-    markup.row(canseledBtn, repeatBtn, yesBtn,)
     
     preview_text = (
         f"<b>Проверьте ваш запрос ({user_order_id}):</b>\n\n"
-        f"<i>{temporary_orders[message.chat.id]['order_text']}</i>\n\n"
-        f"Вы уверены, или хотите переделать?"
+        f"<i>{order_text}</i>\n\n"
+        f"Вы уверены или хотите переделать?"
     )
+    markup = types.InlineKeyboardMarkup()
+    markup.row(canseledBtn, repeatBtn, yesBtn,)
 
-    if content_type == 'photo':
-        MyBot.send_photo(message.chat.id, photo=file_id, caption=preview_text, reply_markup=markup, parse_mode='html')
-    elif content_type == 'document':
-        MyBot.send_document(message.chat.id, document=file_id, caption=preview_text, reply_markup=markup, parse_mode='html')
+    if len(media_list) == 0:
+        MyBot.send_message(chat_id, text=preview_text, reply_markup=markup, parse_mode='html')
+    elif len(media_list) == 1:
+        if media_list[0]['type'] == 'photo':
+            MyBot.send_photo(chat_id, photo=media_list[0]['file_id'], caption=preview_text, reply_markup=markup, parse_mode='html')
+        elif media_list[0]['type'] == 'document':
+            MyBot.send_document(chat_id, document=media_list[0]['file_id'], caption=preview_text, reply_markup=markup, parse_mode='html')
     else:
-        MyBot.send_message(message.chat.id, text=preview_text, reply_markup=markup, parse_mode='html')
-    
+        album = []
+        for item in media_list:
+            if item['type'] == 'photo':
+                album.append(types.InputMediaPhoto(item['file_id']))
+            elif item['type'] == 'document':
+                album.append(types.InputMediaDocument(item['file_id']))
+        MyBot.send_media_group(chat_id, album)
+        MyBot.send_message(chat_id, text=preview_text, reply_markup=markup, parse_mode='html')
+
 MyBot.polling(none_stop=True)
