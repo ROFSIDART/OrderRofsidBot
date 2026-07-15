@@ -12,13 +12,12 @@ ADMIN_CHAT_ID = int(os.getenv('ADMIN_CHAT_ID'))
 MyBot = TeleBot(BOT_TOKEN)
 telebot.apihelper.proxy = {'https': PROXY_URL}
 
-request = {0: '/start', 1: '/art', 2: '/3dmodel', 3: '/website', 4: '/bot', 5: '/other', 6: '/adressto', 7: '/help', 8: '/info'}
+request = {0: '/start', 1: '/art', 2: '/3dmodel', 3: '/website', 4: '/bot', 5: '/other', 6: '/adressto', 7: '/help', 8: '/info', 9: '/myorder'}
 
 temporary_orders = {}
 user_states = {}
 media_groups_cache = {} 
 media_groups_lock = threading.Lock()
-
 
 #button for usrer
 requestBtn1 = types.InlineKeyboardButton('Арт',  callback_data='orderArt')
@@ -31,27 +30,25 @@ exitBtn = types.InlineKeyboardButton('Назад', callback_data='callExitBtn')
 yesBtn = types.InlineKeyboardButton('Отправить', callback_data='callYesBtn')
 canseledBtn = types.InlineKeyboardButton('Отменить', callback_data='callСanseledBtn')
 repeatBtn = types.InlineKeyboardButton('Нет, переделать', callback_data='callRepeatBtn')
+myOrderBtn = types.InlineKeyboardButton('Мои заказы', callback_data='callMyOrder')
 
-#Button for admin
-seeBtn = types.InlineKeyboardButton('Посмотреть', callback_data='callSeeBtn')
-
-Btn = {0: exitBtn, 1: requestBtn1, 2: requestBtn2, 3: requestBtn3, 4: requestBtn4, 5: requestBtn5, 6: requestBtn6, 11: seeBtn}
+Btn = {0: exitBtn, 1: requestBtn1, 2: requestBtn2, 3: requestBtn3, 4: requestBtn4, 5: requestBtn5, 6: requestBtn6, 7: myOrderBtn}
 
 #button group
 def get_menu_markup():
     markup = types.InlineKeyboardMarkup()
     markup.row(Btn[1], Btn[2], Btn[3], Btn[4])
-    markup.row(Btn[5], Btn[6])
+    markup.row(Btn[5], Btn[6], )
     return markup
 def get_order_markup(send_type):
     markup = types.InlineKeyboardMarkup()
-    sendBtn = types.InlineKeyboardButton('Написать ...', callback_data=f'send_{send_type}',)
+    sendBtn = types.InlineKeyboardButton('Написать...', callback_data=f'send_{send_type}',)
     markup.row(Btn[0], sendBtn)
     return markup
 
 def get_exit_markup():
     markup = types.InlineKeyboardMarkup()
-    markup.row(Btn[0])
+    markup.row(Btn[0], Btn[7])
     return markup
 
 @MyBot.message_handler(content_types=['text', 'photo', 'document'])
@@ -77,21 +74,17 @@ def main(message):
          "вы можете отправить их ссылкой в самом сообщении, если они хранятся где либо, или архивом, иначе до Софии может просто не дойти то," 
          "что было отправлено следующим сообщением.</em>\n<b>Внимание!</b> Следующее ваше сообщение будет отправлено автору."
          "\nПожалуйста, напишите ваш запрос, контактные данные и прикрепите файлы (картинка, архив и пр.) в ОДНОМ сообщении:", parse_mode='html', reply_markup=get_exit_markup())
-        user_states[chat_id] = {'state': 'waiting_for_order', 'user_order_id': 'Напрямую'}
-
+        user_states[chat_id] = {'state': 'waiting_for_order', 'user_order_id': '#Напрямую'}
     elif text == request[7]:
         MyBot.send_message(chat_id, text=helpText, reply_markup=get_exit_markup())
     elif text == request[8]:
         MyBot.send_message(chat_id, text=infoText, parse_mode='html', reply_markup=get_exit_markup())
-
-
 
 @MyBot.callback_query_handler(func=lambda callback: True)
 def callback_message(callback):
     chat_id = callback.message.chat.id
     message_id = callback.message.message_id
 
-#bullon button go
     if callback.data == 'orderArt':
         MyBot.edit_message_text(chat_id=chat_id, message_id=message_id, text=artText, parse_mode='html', reply_markup=get_order_markup('art'))
 
@@ -141,7 +134,7 @@ def callback_message(callback):
                     elif item['type'] == 'document':
                         album.append(types.InputMediaDocument(item['file_id'], caption=caption, parse_mode='html'))
                 MyBot.send_media_group(ADMIN_CHAT_ID, album)      
-            MyBot.send_message(chat_id, "🎉 Ваш запрос успешно отправлен! В скором времени София свяжется с вами, чтобы подтвердить запрос...", reply_markup=get_exit_markup())
+            MyBot.send_message(chat_id, "🎉 Ваш запрос успешно отправлен! В скором времени София свяжется с вами, чтобы подтвердить запрос...\n Что бы проверить статус заказа, нажмите 'Мои заказы'", reply_markup=get_exit_markup())
             del temporary_orders[chat_id]
 
     elif callback.data.startswith('send_'):
